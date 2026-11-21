@@ -4,6 +4,7 @@ Needs: the Colab CLI (uv tool install google-colab-cli; Windows also: python clo
 once with the Google account that has the Google AI plan (or Colab pay-as-you-go compute units). Standard library only.
 
   python cloud/colab_h3.py check                       # CLI works? balance? which GPUs?
+  python cloud/colab_h3.py --name video-agent preflight # verify login and an existing session without starting a VM
   python cloud/colab_h3.py start                       # DEFAULT = full install, same as the full 32G repo (voice, Qwen, Music 3, H3, FlashVSR, YuE2, Ming TTS), 2 ComfyUI instances
   python cloud/colab_h3.py start --h3-only             # only ComfyUI + H3 (~3.7 min), 2 ComfyUI instances: local prep + cloud H3, or hybrid
   python cloud/colab_h3.py batch a/spec.json b/spec.json ...   # upload -> render on the VM -> download clips next to each spec
@@ -79,6 +80,35 @@ def alive(name):
 def balance():
     m = re.search(r"Current balance:\s*([\d.]+)", cx(["usage"], check=False))
     return float(m.group(1)) if m else None
+
+
+def cmd_preflight(a):
+    """Check authenticated account access and run a small probe on the named VM."""
+    cli = colab_bin()
+    marker = "COLAB_CONNECTION_OK"
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "probe.py"
+        probe.write_text(f"print({marker!r})\n", encoding="utf-8")
+        for label, args, expected in (
+            ("帳號", ["usage"], r"(?m)^Current balance:\s*[\d.]+\b"),
+            ("執行環境", ["exec", "-s", a.name, "--file", str(probe)], rf"(?m)^{marker}$"),
+        ):
+            try:
+                result = subprocess.run(
+                    [cli, *args], stdin=subprocess.DEVNULL, capture_output=True,
+                    encoding="utf-8", errors="replace", timeout=45,
+                )
+            except subprocess.TimeoutExpired:
+                sys.exit(f"[preflight] {label}查詢逾時。")
+            except OSError:
+                sys.exit("[preflight] 無法執行 Colab CLI。")
+            if result.returncode or not re.search(expected, result.stdout):
+                # CLI errors may include OAuth URLs or account details.
+                if label == "帳號":
+                    sys.exit("[preflight] 無法驗證 Colab 帳號。請在此電腦的終端機自行執行 colab usage。")
+                sys.exit("[preflight] 無法連到指定工作階段。請在此電腦執行 colab sessions 並確認名稱和狀態。")
+            print(f"[preflight] {label}驗證通過", flush=True)
+    print(marker)
 
 
 def upload(name, local, remote, tries=4):
@@ -208,6 +238,8 @@ def out_dir(spec_path):
 def cmd_batch(a):
     specs = [Path(s).resolve() for s in a.specs]
     if not alive(a.name) or "SETUP_DONE" not in vm(a.name, "import os\nprint(open('/content/setup_h3.log').read() if os.path.exists('/content/setup_h3.log') else '')"):
+        if a.existing_only:
+            sys.exit("[batch] 指定工作階段未連線或缺少 H3 安裝完成標記。")
         cmd_start(a)
     batch = time.strftime("b%Y%m%d_%H%M%S")
     tmp = Path(tempfile.mkdtemp()); jobs = []; where = {}
@@ -368,6 +400,7 @@ def main():
     ap.add_argument("--name", default="h3", help="Colab session name (default h3)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check")
+    sub.add_parser("preflight", help="verify account access and an existing session without starting a VM")
     for c in ("start", "batch", "full-setup"):
         p = sub.add_parser(c)
         p.add_argument("--gpu", default="G4", help="G4 (default, fastest AND cheapest per shot) | A100 | L4")
@@ -379,13 +412,14 @@ def main():
             p.add_argument("--encoder", default="heretic", choices=["heretic", "nvfp4"])
         if c == "batch":
             p.add_argument("specs", nargs="+", help="h3_shot spec files (outputs go next to each: <dir>/ for spec.json, else <name>/)")
+            p.add_argument("--existing-only", action="store_true", help="require an existing session with H3 already installed")
             p.add_argument("--stop-after", action="store_true", help="stop the VM when the batch is downloaded - only for the LAST batch: while reviewing / retaking keep the VM up (reinstall costs 4-10 min)")
     sub.add_parser("keepalive").add_argument("--minutes", type=int, default=30)
     sub.add_parser("stop"); sub.add_parser("status"); sub.add_parser("smoke")
     p = sub.add_parser("film"); p.add_argument("film_dir"); p.add_argument("stages", nargs="*")
     p.add_argument("--env", action="append", default=[], help="extra KEY=VALUE for make_film.py / make_battle.py on the VM (e.g. ONLY=S3); ONLY/ALLOW_REVIEW/UPSCALE set locally are passed automatically")
     a = ap.parse_args()
-    {"check": cmd_check, "start": cmd_start, "batch": cmd_batch, "keepalive": cmd_keepalive, "stop": cmd_stop, "status": cmd_status,
+    {"check": cmd_check, "preflight": cmd_preflight, "start": cmd_start, "batch": cmd_batch, "keepalive": cmd_keepalive, "stop": cmd_stop, "status": cmd_status,
      "full-setup": cmd_full_setup, "smoke": cmd_smoke, "film": cmd_film}[a.cmd](a)
 
 
