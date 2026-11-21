@@ -1,5 +1,7 @@
 # cloud/：用 Google Colab 跑 H3（本機跑不動的人用）
 
+從 Windows 讓 Codex 管理既有 Colab 工作階段，見 [Windows 本機 Codex 工作流](codex-windows.md)。
+
 **做法：本機準備、雲端只跑 H3。** 劇本、首幀、配音、剪接在你的電腦做；H3 影片整批送到 Google Colab 的 G4 顯卡跑，跑完下載回來。素材和成品一直都在你的硬碟，Colab 機器一關掉就清空。
 本機連配音都跑不動（沒有 NVIDIA 顯卡、Mac）的人，可以用**全雲端模式**：整套環境裝在 Colab 上，整支片在雲端做完再下載。
 
